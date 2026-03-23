@@ -1,0 +1,6 @@
+.claude/
+bin/
+*.test
+go.sum
+.vscode/
+.idea/
