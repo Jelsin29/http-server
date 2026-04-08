@@ -22,8 +22,9 @@ the fix was to use fixed high ports (18081, 18082) for tests. feels hacky but wh
 
 ## what actually broke (real bugs)
 
-- test on `:0` failed with "connection refused"— fixed by using fixed ports
+- test on `:0` failed with "connection refused"— first tried to bind to `:0` and connect to `:0`, which doesn't work. you can listen on `:0` (OS assigns port) but you can't connect to it. had to use fixed ports for tests.
 - spent way too long wondering why the accept loop wasn't returning... it's not supposed to return, it's an infinite loop (`for { ... }`). tests run it in a goroutine.
+- forgot to add `defer conn.Close()` inside the connection handler initially, was leaking connections. remembered goroutines are milestone 4, this is milestone 1, moved it to sequential handling.
 
 ## usage
 
