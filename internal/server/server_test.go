@@ -32,6 +32,7 @@ func TestStart(t *testing.T) {
 				errChan <- Start(tt.addr)
 			}()
 
+			// Give server time to start
 			time.Sleep(10 * time.Millisecond)
 
 			conn, err := net.Dial("tcp", tt.addr)
