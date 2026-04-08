@@ -4,3 +4,4 @@ bin/
 go.sum
 .vscode/
 .idea/
+.gga
