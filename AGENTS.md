@@ -2,11 +2,11 @@
 
 ## Anti-AI Pattern Enforcement (MANDATORY)
 
-**This project must follow the anti-AI guidelines in `/home/jelsin/los-50/.claude/anti-ai-patterns.md`**
+**This project must follow the anti-AI guidelines in `.claude/anti-ai-patterns.md` at the workspace root.**
 
 Before writing ANY commit, code, or documentation:
 
-1. **Read the anti-AI patterns guide** — It's located at `../../../.claude/anti-ai-patterns.md` from this directory
+1. **Read the anti-AI patterns guide** — Run `cat ../../.claude/anti-ai-patterns.md` from this directory
 2. **Commit timing must be realistic** — Space out commits naturally, no rapid-fire
 3. **Commit messages must be concise** — "add X", "fix Y", not detailed explanations
 4. **Leave development scars** — Show iteration, bugs fixed, refactors
