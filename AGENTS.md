@@ -6,7 +6,7 @@
 
 Before writing ANY commit, code, or documentation:
 
-1. **Read the anti-AI patterns guide** — Run `cat ../../.claude/anti-ai-patterns.md` from this directory
+1. **Read the anti-AI patterns guide** — Run `cat ../../.claude/anti-ai-patterns.md` from this directory (2 levels up)
 2. **Commit timing must be realistic** — Space out commits naturally, no rapid-fire
 3. **Commit messages must be concise** — "add X", "fix Y", not detailed explanations
 4. **Leave development scars** — Show iteration, bugs fixed, refactors
@@ -22,7 +22,7 @@ Before writing ANY commit, code, or documentation:
 - [ ] Idiomatic names for the language
 - [ ] Timing looks plausible
 
-**GGA enforces this** — If rejected, fix and re-commit. NEVER use `--no-verify`.
+**GGA enforces this** — If GGA rejects a commit, fix the issues and re-commit. NEVER use `--no-verify`.
 
 ---
 
