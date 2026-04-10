@@ -30,5 +30,5 @@
 ## Phase 5: Verification
 
 - [x] 5.1 Run `go test -race -v ./...`
-- [ ] 5.2 Update README learning journal with milestone 2 notes
+- [x] 5.2 Update README learning journal with milestone 2 notes
 - [ ] 5.3 Verify `git status` is clean after atomic commits
