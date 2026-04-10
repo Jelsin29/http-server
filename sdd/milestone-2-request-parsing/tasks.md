@@ -31,4 +31,4 @@
 
 - [x] 5.1 Run `go test -race -v ./...`
 - [x] 5.2 Update README learning journal with milestone 2 notes
-- [ ] 5.3 Verify `git status` is clean after atomic commits
+- [x] 5.3 Verify `git status` is clean after atomic commits
