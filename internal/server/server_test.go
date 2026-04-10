@@ -83,6 +83,37 @@ func TestStartPortInUse(t *testing.T) {
 	}
 }
 
+func TestStartMalformedRequest(t *testing.T) {
+	addr := ":18083"
+
+	go func() {
+		_ = Start(addr)
+	}()
+
+	// Give server time to start.
+	time.Sleep(10 * time.Millisecond)
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("failed to connect: %v", err)
+	}
+	defer conn.Close()
+
+	request := "GET / HTTP/1.1\r\nHost localhost\r\n\r\n"
+	if _, err := conn.Write([]byte(request)); err != nil {
+		t.Fatalf("failed to write malformed request: %v", err)
+	}
+
+	got, err := io.ReadAll(conn)
+	if err != nil {
+		t.Fatalf("failed to read response: %v", err)
+	}
+
+	if len(got) != 0 {
+		t.Fatalf("received %q, want empty response for malformed request", string(got))
+	}
+}
+
 func TestHandleConnection(t *testing.T) {
 	tests := []struct {
 		name             string
