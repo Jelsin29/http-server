@@ -5,6 +5,7 @@ import (
 	"log"
 	"net"
 
+	"github.com/jelsin/http-server/internal/request"
 	"github.com/jelsin/http-server/internal/response"
 )
 
@@ -28,5 +29,13 @@ func Start(addr string) error {
 
 func handleConnection(conn net.Conn) {
 	defer conn.Close()
-	conn.Write([]byte(response.HardcodedOK()))
+
+	if _, err := request.Parse(conn); err != nil {
+		log.Printf("parsing request from %s: %v", conn.RemoteAddr(), err)
+		return
+	}
+
+	if _, err := conn.Write([]byte(response.HardcodedOK())); err != nil {
+		log.Printf("writing response to %s: %v", conn.RemoteAddr(), err)
+	}
 }

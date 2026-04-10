@@ -1,38 +1,46 @@
 package server
 
 import (
+	"bytes"
+	"errors"
+	"io"
+	"log"
 	"net"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jelsin/http-server/internal/response"
 )
 
 func TestStart(t *testing.T) {
 	tests := []struct {
-		name string
-		addr string
-		want string
+		name    string
+		addr    string
+		request string
+		want    string
 	}{
 		{
-			name: "responds with 200 OK on fixed port",
-			addr: ":18081",
-			want: "HTTP/1.1 200 OK\r\n\r\n",
+			name:    "responds with 200 OK on fixed port",
+			addr:    ":18081",
+			request: "GET / HTTP/1.1\r\nHost: localhost:18081\r\n\r\n",
+			want:    "HTTP/1.1 200 OK\r\n\r\n",
 		},
 		{
-			name: "responds with 200 OK on different port",
-			addr: ":18082",
-			want: "HTTP/1.1 200 OK\r\n\r\n",
+			name:    "responds with 200 OK on different port",
+			addr:    ":18082",
+			request: "GET /notes HTTP/1.1\r\nHost: localhost:18082\r\nUser-Agent: test\r\n\r\n",
+			want:    "HTTP/1.1 200 OK\r\n\r\n",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			errChan := make(chan error, 1)
 			go func() {
-				errChan <- Start(tt.addr)
+				_ = Start(tt.addr)
 			}()
 
-			// Give server time to start
+			// Give server time to start.
 			time.Sleep(10 * time.Millisecond)
 
 			conn, err := net.Dial("tcp", tt.addr)
@@ -41,15 +49,17 @@ func TestStart(t *testing.T) {
 			}
 			defer conn.Close()
 
-			buffer := make([]byte, 1024)
-			n, err := conn.Read(buffer)
+			if _, err := conn.Write([]byte(tt.request)); err != nil {
+				t.Fatalf("failed to write request: %v", err)
+			}
+
+			got, err := io.ReadAll(conn)
 			if err != nil {
 				t.Fatalf("failed to read: %v", err)
 			}
 
-			got := string(buffer[:n])
-			if got != tt.want {
-				t.Errorf("received %q, want %q", got, tt.want)
+			if string(got) != tt.want {
+				t.Errorf("received %q, want %q", string(got), tt.want)
 			}
 		})
 	}
@@ -71,4 +81,140 @@ func TestStartPortInUse(t *testing.T) {
 		!strings.Contains(err.Error(), "bind") {
 		t.Errorf("expected error containing 'address already in use' or 'bind', got %v", err)
 	}
+}
+
+func TestHandleConnection(t *testing.T) {
+	tests := []struct {
+		name             string
+		request          string
+		writeErr         error
+		wantResponse     string
+		wantClosed       bool
+		wantWriteCalls   int
+		wantLogSubstring string
+	}{
+		{
+			name:           "writes response and closes on valid request",
+			request:        "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n",
+			wantResponse:   response.HardcodedOK(),
+			wantClosed:     true,
+			wantWriteCalls: 1,
+		},
+		{
+			name:             "logs parse error and closes malformed request",
+			request:          "GET / HTTP/1.1\r\nHost localhost\r\n\r\n",
+			wantClosed:       true,
+			wantWriteCalls:   0,
+			wantLogSubstring: "parsing request",
+		},
+		{
+			name:             "logs write error and still closes connection",
+			request:          "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n",
+			writeErr:         errors.New("boom"),
+			wantClosed:       true,
+			wantWriteCalls:   1,
+			wantLogSubstring: "writing response",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			conn := &stubConn{
+				readBuffer: bytes.NewBufferString(tt.request),
+				writeErr:   tt.writeErr,
+				remoteAddr: stubAddr("client:1234"),
+			}
+
+			var logs bytes.Buffer
+			previousWriter := log.Writer()
+			log.SetOutput(&logs)
+			defer log.SetOutput(previousWriter)
+
+			handleConnection(conn)
+
+			if conn.closed != tt.wantClosed {
+				t.Fatalf("closed = %v, want %v", conn.closed, tt.wantClosed)
+			}
+
+			if conn.writeCalls != tt.wantWriteCalls {
+				t.Fatalf("writeCalls = %d, want %d", conn.writeCalls, tt.wantWriteCalls)
+			}
+
+			if conn.writeBuffer.String() != tt.wantResponse {
+				t.Fatalf("response = %q, want %q", conn.writeBuffer.String(), tt.wantResponse)
+			}
+
+			if tt.wantLogSubstring == "" {
+				if logs.Len() != 0 {
+					t.Fatalf("unexpected logs: %q", logs.String())
+				}
+				return
+			}
+
+			if !strings.Contains(logs.String(), tt.wantLogSubstring) {
+				t.Fatalf("logs = %q, want substring %q", logs.String(), tt.wantLogSubstring)
+			}
+		})
+	}
+}
+
+type stubConn struct {
+	readBuffer  *bytes.Buffer
+	writeBuffer bytes.Buffer
+	writeErr    error
+	closed      bool
+	writeCalls  int
+	remoteAddr  net.Addr
+}
+
+func (c *stubConn) Read(p []byte) (int, error) {
+	return c.readBuffer.Read(p)
+}
+
+func (c *stubConn) Write(p []byte) (int, error) {
+	c.writeCalls++
+	if c.writeErr != nil {
+		return 0, c.writeErr
+	}
+
+	return c.writeBuffer.Write(p)
+}
+
+func (c *stubConn) Close() error {
+	c.closed = true
+	return nil
+}
+
+func (c *stubConn) LocalAddr() net.Addr {
+	return stubAddr("server:8080")
+}
+
+func (c *stubConn) RemoteAddr() net.Addr {
+	if c.remoteAddr != nil {
+		return c.remoteAddr
+	}
+
+	return stubAddr("client:0")
+}
+
+func (c *stubConn) SetDeadline(time.Time) error {
+	return nil
+}
+
+func (c *stubConn) SetReadDeadline(time.Time) error {
+	return nil
+}
+
+func (c *stubConn) SetWriteDeadline(time.Time) error {
+	return nil
+}
+
+type stubAddr string
+
+func (a stubAddr) Network() string {
+	return "tcp"
+}
+
+func (a stubAddr) String() string {
+	return string(a)
 }
