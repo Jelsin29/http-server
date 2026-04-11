@@ -6,11 +6,12 @@ import (
 	"io"
 	"log"
 	"net"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/jelsin/http-server/internal/response"
+	"github.com/jelsin/http-server/internal/request"
 )
 
 func TestStart(t *testing.T) {
@@ -21,16 +22,22 @@ func TestStart(t *testing.T) {
 		want    string
 	}{
 		{
-			name:    "responds with 200 OK on fixed port",
+			name:    "serves index file from root path",
 			addr:    ":18081",
 			request: "GET / HTTP/1.1\r\nHost: localhost:18081\r\n\r\n",
-			want:    "HTTP/1.1 200 OK\r\n\r\n",
+			want:    mustReadFile(t, "../../public/index.html"),
 		},
 		{
-			name:    "responds with 200 OK on different port",
+			name:    "serves css asset with body",
 			addr:    ":18082",
-			request: "GET /notes HTTP/1.1\r\nHost: localhost:18082\r\nUser-Agent: test\r\n\r\n",
-			want:    "HTTP/1.1 200 OK\r\n\r\n",
+			request: "GET /assets/app.css HTTP/1.1\r\nHost: localhost:18082\r\nUser-Agent: test\r\n\r\n",
+			want:    mustReadFile(t, "../../public/assets/app.css"),
+		},
+		{
+			name:    "returns not found for missing file",
+			addr:    ":18084",
+			request: "GET /missing.txt HTTP/1.1\r\nHost: localhost:18084\r\n\r\n",
+			want:    "not found",
 		},
 	}
 
@@ -58,8 +65,30 @@ func TestStart(t *testing.T) {
 				t.Fatalf("failed to read: %v", err)
 			}
 
-			if string(got) != tt.want {
-				t.Errorf("received %q, want %q", string(got), tt.want)
+			responseText := string(got)
+
+			if tt.name == "returns not found for missing file" {
+				if !strings.Contains(responseText, "HTTP/1.1 404 Not Found") {
+					t.Fatalf("response = %q, want 404 status", responseText)
+				}
+			} else if !strings.Contains(responseText, "HTTP/1.1 200 OK") {
+				t.Fatalf("response = %q, want 200 status", responseText)
+			}
+
+			if !strings.Contains(responseText, tt.want) {
+				t.Errorf("response = %q, want body containing %q", responseText, tt.want)
+			}
+
+			if !strings.Contains(responseText, "Content-Length:") {
+				t.Errorf("response = %q, want Content-Length header", responseText)
+			}
+
+			if tt.name == "serves css asset with body" && !strings.Contains(responseText, "Content-Type: text/css; charset=utf-8") {
+				t.Errorf("response = %q, want css content type", responseText)
+			}
+
+			if tt.name == "serves index file from root path" && !strings.Contains(responseText, "Content-Type: text/html; charset=utf-8") {
+				t.Errorf("response = %q, want html content type", responseText)
 			}
 		})
 	}
@@ -127,7 +156,14 @@ func TestHandleConnection(t *testing.T) {
 		{
 			name:           "writes response and closes on valid request",
 			request:        "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n",
-			wantResponse:   response.HardcodedOK(),
+			wantResponse:   string(mustBuildResponse(t, &request.Request{Method: "GET", Target: "/", Version: "HTTP/1.1"})),
+			wantClosed:     true,
+			wantWriteCalls: 1,
+		},
+		{
+			name:           "writes not found response for missing file",
+			request:        "GET /missing.txt HTTP/1.1\r\nHost: localhost\r\n\r\n",
+			wantResponse:   string(mustBuildResponse(t, &request.Request{Method: "GET", Target: "/missing.txt", Version: "HTTP/1.1"})),
 			wantClosed:     true,
 			wantWriteCalls: 1,
 		},
@@ -187,6 +223,28 @@ func TestHandleConnection(t *testing.T) {
 			}
 		})
 	}
+}
+
+func mustBuildResponse(t *testing.T, req *request.Request) []byte {
+	t.Helper()
+
+	responseBytes, err := buildResponse(req)
+	if err != nil {
+		t.Fatalf("buildResponse() error = %v", err)
+	}
+
+	return responseBytes
+}
+
+func mustReadFile(t *testing.T, name string) string {
+	t.Helper()
+
+	body, err := os.ReadFile(name)
+	if err != nil {
+		t.Fatalf("reading file %s: %v", name, err)
+	}
+
+	return string(body)
 }
 
 type stubConn struct {
