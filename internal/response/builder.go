@@ -36,13 +36,6 @@ func Build(msg Message) []byte {
 	return buffer.Bytes()
 }
 
-func HardcodedOK() string {
-	return string(Build(Message{
-		StatusCode: 200,
-		Reason:     "OK",
-	}))
-}
-
 func sortedHeaderKeys(headers map[string]string) []string {
 	keys := make([]string, 0, len(headers))
 	for key := range headers {

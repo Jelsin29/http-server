@@ -23,6 +23,11 @@ func TestLoad(t *testing.T) {
 		t.Fatalf("writing css file: %v", err)
 	}
 
+	outsideFile := filepath.Join(filepath.Dir(root), "secret.txt")
+	if err := os.WriteFile(outsideFile, []byte("top secret"), 0o644); err != nil {
+		t.Fatalf("writing outside file: %v", err)
+	}
+
 	tests := []struct {
 		name            string
 		target          string
@@ -45,6 +50,11 @@ func TestLoad(t *testing.T) {
 		{
 			name:    "rejects traversal outside root",
 			target:  "/../secret.txt",
+			wantErr: ErrTraversal,
+		},
+		{
+			name:    "rejects traversal even when outside file exists",
+			target:  "/assets/../../secret.txt",
 			wantErr: ErrTraversal,
 		},
 		{

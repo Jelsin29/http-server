@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -39,6 +40,12 @@ func TestStart(t *testing.T) {
 			request: "GET /missing.txt HTTP/1.1\r\nHost: localhost:18084\r\n\r\n",
 			want:    "not found",
 		},
+		{
+			name:    "returns not found for traversal attempt",
+			addr:    ":18085",
+			request: "GET /../secret.txt HTTP/1.1\r\nHost: localhost:18085\r\n\r\n",
+			want:    "not found",
+		},
 	}
 
 	for _, tt := range tests {
@@ -67,7 +74,7 @@ func TestStart(t *testing.T) {
 
 			responseText := string(got)
 
-			if tt.name == "returns not found for missing file" {
+			if tt.name == "returns not found for missing file" || tt.name == "returns not found for traversal attempt" {
 				if !strings.Contains(responseText, "HTTP/1.1 404 Not Found") {
 					t.Fatalf("response = %q, want 404 status", responseText)
 				}
@@ -79,8 +86,11 @@ func TestStart(t *testing.T) {
 				t.Errorf("response = %q, want body containing %q", responseText, tt.want)
 			}
 
-			if !strings.Contains(responseText, "Content-Length:") {
+			contentLength, found := responseHeader(responseText, "Content-Length")
+			if !found {
 				t.Errorf("response = %q, want Content-Length header", responseText)
+			} else if contentLength != strconv.Itoa(bodyLength(responseText)) {
+				t.Errorf("Content-Length = %q, want %d", contentLength, bodyLength(responseText))
 			}
 
 			if tt.name == "serves css asset with body" && !strings.Contains(responseText, "Content-Type: text/css; charset=utf-8") {
@@ -245,6 +255,28 @@ func mustReadFile(t *testing.T, name string) string {
 	}
 
 	return string(body)
+}
+
+func responseHeader(responseText string, name string) (string, bool) {
+	lines := strings.Split(responseText, "\r\n")
+	prefix := name + ": "
+
+	for _, line := range lines {
+		if strings.HasPrefix(line, prefix) {
+			return strings.TrimPrefix(line, prefix), true
+		}
+	}
+
+	return "", false
+}
+
+func bodyLength(responseText string) int {
+	parts := strings.SplitN(responseText, "\r\n\r\n", 2)
+	if len(parts) != 2 {
+		return 0
+	}
+
+	return len(parts[1])
 }
 
 type stubConn struct {
