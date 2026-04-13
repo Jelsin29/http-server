@@ -16,6 +16,10 @@ import (
 )
 
 var documentRoot = locateDocumentRoot()
+var loadAsset = static.Load
+var renderMessage = func(msg response.Message) ([]byte, error) {
+	return response.Build(msg), nil
+}
 
 func Start(addr string) error {
 	ln, err := net.Listen("tcp", addr)
@@ -31,7 +35,7 @@ func Start(addr string) error {
 			continue
 		}
 
-		handleConnection(conn)
+		go handleConnection(conn)
 	}
 }
 
@@ -41,39 +45,31 @@ func handleConnection(conn net.Conn) {
 	req, err := request.Parse(conn)
 	if err != nil {
 		log.Printf("parsing request from %s: %v", conn.RemoteAddr(), err)
+		writeResponse(conn, response.PlainText(400, "Bad Request", "bad request"))
 		return
 	}
 
 	responseBytes, err := buildResponse(req)
 	if err != nil {
 		log.Printf("building response for %s %s: %v", req.Method, req.Target, err)
+		writeResponse(conn, response.PlainText(500, "Internal Server Error", "internal server error"))
 		return
 	}
 
-	if _, err := conn.Write(responseBytes); err != nil {
-		log.Printf("writing response to %s: %v", conn.RemoteAddr(), err)
-	}
+	writeResponse(conn, responseBytes)
 }
 
 func buildResponse(req *request.Request) ([]byte, error) {
-	asset, err := static.Load(documentRoot, req.Target)
+	asset, err := loadAsset(documentRoot, req.Target)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) || errors.Is(err, static.ErrTraversal) {
-			return []byte(response.Build(response.Message{
-				StatusCode: 404,
-				Reason:     "Not Found",
-				Headers: map[string]string{
-					"Content-Length": strconv.Itoa(len("not found")),
-					"Content-Type":   "text/plain; charset=utf-8",
-				},
-				Body: []byte("not found"),
-			})), nil
+			return response.PlainText(404, "Not Found", "not found"), nil
 		}
 
 		return nil, err
 	}
 
-	return response.Build(response.Message{
+	responseBytes, err := renderMessage(response.Message{
 		StatusCode: 200,
 		Reason:     "OK",
 		Headers: map[string]string{
@@ -81,7 +77,18 @@ func buildResponse(req *request.Request) ([]byte, error) {
 			"Content-Type":   asset.ContentType,
 		},
 		Body: asset.Body,
-	}), nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("rendering response: %w", err)
+	}
+
+	return responseBytes, nil
+}
+
+func writeResponse(conn net.Conn, responseBytes []byte) {
+	if _, err := conn.Write(responseBytes); err != nil {
+		log.Printf("writing response to %s: %v", conn.RemoteAddr(), err)
+	}
 }
 
 func locateDocumentRoot() string {

@@ -9,96 +9,89 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/jelsin/http-server/internal/request"
+	"github.com/jelsin/http-server/internal/response"
+	"github.com/jelsin/http-server/internal/static"
 )
 
 func TestStart(t *testing.T) {
 	tests := []struct {
-		name    string
-		addr    string
-		request string
-		want    string
+		name       string
+		addr       string
+		request    string
+		wantStatus string
+		wantBody   string
 	}{
 		{
-			name:    "serves index file from root path",
-			addr:    ":18081",
-			request: "GET / HTTP/1.1\r\nHost: localhost:18081\r\n\r\n",
-			want:    mustReadFile(t, "../../public/index.html"),
+			name:       "serves index file from root path",
+			addr:       ":18081",
+			request:    "GET / HTTP/1.1\r\nHost: localhost:18081\r\n\r\n",
+			wantStatus: "HTTP/1.1 200 OK",
+			wantBody:   mustReadFile(t, "../../public/index.html"),
 		},
 		{
-			name:    "serves css asset with body",
-			addr:    ":18082",
-			request: "GET /assets/app.css HTTP/1.1\r\nHost: localhost:18082\r\nUser-Agent: test\r\n\r\n",
-			want:    mustReadFile(t, "../../public/assets/app.css"),
+			name:       "serves css asset with body",
+			addr:       ":18082",
+			request:    "GET /assets/app.css HTTP/1.1\r\nHost: localhost:18082\r\nUser-Agent: test\r\n\r\n",
+			wantStatus: "HTTP/1.1 200 OK",
+			wantBody:   mustReadFile(t, "../../public/assets/app.css"),
 		},
 		{
-			name:    "returns not found for missing file",
-			addr:    ":18084",
-			request: "GET /missing.txt HTTP/1.1\r\nHost: localhost:18084\r\n\r\n",
-			want:    "not found",
+			name:       "returns bad request for malformed request",
+			addr:       ":18083",
+			request:    "GET / HTTP/1.1\r\nHost localhost\r\n\r\n",
+			wantStatus: "HTTP/1.1 400 Bad Request",
+			wantBody:   "bad request",
 		},
 		{
-			name:    "returns not found for traversal attempt",
-			addr:    ":18085",
-			request: "GET /../secret.txt HTTP/1.1\r\nHost: localhost:18085\r\n\r\n",
-			want:    "not found",
+			name:       "returns not found for missing file",
+			addr:       ":18084",
+			request:    "GET /missing.txt HTTP/1.1\r\nHost: localhost:18084\r\n\r\n",
+			wantStatus: "HTTP/1.1 404 Not Found",
+			wantBody:   "not found",
+		},
+		{
+			name:       "returns not found for traversal attempt",
+			addr:       ":18085",
+			request:    "GET /../secret.txt HTTP/1.1\r\nHost: localhost:18085\r\n\r\n",
+			wantStatus: "HTTP/1.1 404 Not Found",
+			wantBody:   "not found",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			go func() {
-				_ = Start(tt.addr)
-			}()
+			startServer(t, tt.addr)
 
-			// Give server time to start.
-			time.Sleep(10 * time.Millisecond)
+			responseText := exchangeRequest(t, tt.addr, tt.request)
 
-			conn, err := net.Dial("tcp", tt.addr)
-			if err != nil {
-				t.Fatalf("failed to connect: %v", err)
-			}
-			defer conn.Close()
-
-			if _, err := conn.Write([]byte(tt.request)); err != nil {
-				t.Fatalf("failed to write request: %v", err)
+			if !strings.Contains(responseText, tt.wantStatus) {
+				t.Fatalf("response = %q, want status %q", responseText, tt.wantStatus)
 			}
 
-			got, err := io.ReadAll(conn)
-			if err != nil {
-				t.Fatalf("failed to read: %v", err)
-			}
-
-			responseText := string(got)
-
-			if tt.name == "returns not found for missing file" || tt.name == "returns not found for traversal attempt" {
-				if !strings.Contains(responseText, "HTTP/1.1 404 Not Found") {
-					t.Fatalf("response = %q, want 404 status", responseText)
-				}
-			} else if !strings.Contains(responseText, "HTTP/1.1 200 OK") {
-				t.Fatalf("response = %q, want 200 status", responseText)
-			}
-
-			if !strings.Contains(responseText, tt.want) {
-				t.Errorf("response = %q, want body containing %q", responseText, tt.want)
+			if !strings.Contains(responseText, tt.wantBody) {
+				t.Fatalf("response = %q, want body containing %q", responseText, tt.wantBody)
 			}
 
 			contentLength, found := responseHeader(responseText, "Content-Length")
 			if !found {
-				t.Errorf("response = %q, want Content-Length header", responseText)
-			} else if contentLength != strconv.Itoa(bodyLength(responseText)) {
-				t.Errorf("Content-Length = %q, want %d", contentLength, bodyLength(responseText))
+				t.Fatalf("response = %q, want Content-Length header", responseText)
+			}
+
+			if contentLength != strconv.Itoa(bodyLength(responseText)) {
+				t.Fatalf("Content-Length = %q, want %d", contentLength, bodyLength(responseText))
 			}
 
 			if tt.name == "serves css asset with body" && !strings.Contains(responseText, "Content-Type: text/css; charset=utf-8") {
-				t.Errorf("response = %q, want css content type", responseText)
+				t.Fatalf("response = %q, want css content type", responseText)
 			}
 
 			if tt.name == "serves index file from root path" && !strings.Contains(responseText, "Content-Type: text/html; charset=utf-8") {
-				t.Errorf("response = %q, want html content type", responseText)
+				t.Fatalf("response = %q, want html content type", responseText)
 			}
 		})
 	}
@@ -113,43 +106,111 @@ func TestStartPortInUse(t *testing.T) {
 
 	err = Start(":18080")
 	if err == nil {
-		t.Error("expected error when port in use, got nil")
+		t.Fatal("expected error when port in use, got nil")
 	}
 
-	if !strings.Contains(err.Error(), "address already in use") &&
-		!strings.Contains(err.Error(), "bind") {
-		t.Errorf("expected error containing 'address already in use' or 'bind', got %v", err)
+	if !strings.Contains(err.Error(), "address already in use") && !strings.Contains(err.Error(), "bind") {
+		t.Fatalf("expected error containing 'address already in use' or 'bind', got %v", err)
 	}
 }
 
-func TestStartMalformedRequest(t *testing.T) {
-	addr := ":18083"
+func TestStartReturnsInternalServerError(t *testing.T) {
+	stubAssetLoader(t, func(root string, target string) (*static.Asset, error) {
+		if target == "/boom" {
+			return nil, errors.New("disk melted")
+		}
+
+		return static.Load(root, target)
+	})
+
+	startServer(t, ":18086")
+
+	responseText := exchangeRequest(t, ":18086", "GET /boom HTTP/1.1\r\nHost: localhost:18086\r\n\r\n")
+
+	if !strings.Contains(responseText, "HTTP/1.1 500 Internal Server Error") {
+		t.Fatalf("response = %q, want 500 status", responseText)
+	}
+
+	if !strings.Contains(responseText, "internal server error") {
+		t.Fatalf("response = %q, want generic 500 body", responseText)
+	}
+
+	if strings.Contains(responseText, "disk melted") {
+		t.Fatalf("response = %q, should not leak internal error details", responseText)
+	}
+}
+
+func TestStartHandlesRequestsConcurrently(t *testing.T) {
+	var blockOnce sync.Once
+	blocked := make(chan struct{})
+	release := make(chan struct{})
+
+	stubAssetLoader(t, func(root string, target string) (*static.Asset, error) {
+		if target == "/block" {
+			blockOnce.Do(func() {
+				close(blocked)
+			})
+			<-release
+			return static.Load(root, "/")
+		}
+
+		return static.Load(root, target)
+	})
+
+	startServer(t, ":18087")
+
+	firstDone := make(chan string, 1)
+	firstErr := make(chan error, 1)
 
 	go func() {
-		_ = Start(addr)
+		responseText, err := exchangeRequestWithError(":18087", "GET /block HTTP/1.1\r\nHost: localhost:18087\r\n\r\n")
+		if err != nil {
+			firstErr <- err
+			return
+		}
+
+		firstDone <- responseText
 	}()
 
-	// Give server time to start.
-	time.Sleep(10 * time.Millisecond)
-
-	conn, err := net.Dial("tcp", addr)
-	if err != nil {
-		t.Fatalf("failed to connect: %v", err)
-	}
-	defer conn.Close()
-
-	request := "GET / HTTP/1.1\r\nHost localhost\r\n\r\n"
-	if _, err := conn.Write([]byte(request)); err != nil {
-		t.Fatalf("failed to write malformed request: %v", err)
+	select {
+	case <-blocked:
+	case err := <-firstErr:
+		t.Fatalf("first request failed early: %v", err)
+	case <-time.After(1 * time.Second):
+		t.Fatal("timed out waiting for blocked request")
 	}
 
-	got, err := io.ReadAll(conn)
-	if err != nil {
-		t.Fatalf("failed to read response: %v", err)
+	secondResponse := exchangeRequest(t, ":18087", "GET /assets/app.css HTTP/1.1\r\nHost: localhost:18087\r\n\r\n")
+	if !strings.Contains(secondResponse, "HTTP/1.1 200 OK") {
+		t.Fatalf("second response = %q, want 200 status", secondResponse)
 	}
 
-	if len(got) != 0 {
-		t.Fatalf("received %q, want empty response for malformed request", string(got))
+	if !strings.Contains(secondResponse, mustReadFile(t, "../../public/assets/app.css")) {
+		t.Fatalf("second response = %q, want css body", secondResponse)
+	}
+
+	select {
+	case responseText := <-firstDone:
+		t.Fatalf("first response finished before release: %q", responseText)
+	case err := <-firstErr:
+		t.Fatalf("first request failed before release: %v", err)
+	default:
+	}
+
+	close(release)
+
+	select {
+	case responseText := <-firstDone:
+		if !strings.Contains(responseText, "HTTP/1.1 200 OK") {
+			t.Fatalf("first response = %q, want 200 status", responseText)
+		}
+		if !strings.Contains(responseText, mustReadFile(t, "../../public/index.html")) {
+			t.Fatalf("first response = %q, want index body", responseText)
+		}
+	case err := <-firstErr:
+		t.Fatalf("first request failed: %v", err)
+	case <-time.After(1 * time.Second):
+		t.Fatal("timed out waiting for first response after release")
 	}
 }
 
@@ -158,6 +219,7 @@ func TestHandleConnection(t *testing.T) {
 		name             string
 		request          string
 		writeErr         error
+		setup            func(t *testing.T)
 		wantResponse     string
 		wantClosed       bool
 		wantWriteCalls   int
@@ -178,11 +240,25 @@ func TestHandleConnection(t *testing.T) {
 			wantWriteCalls: 1,
 		},
 		{
-			name:             "logs parse error and closes malformed request",
+			name:             "writes bad request response for malformed request",
 			request:          "GET / HTTP/1.1\r\nHost localhost\r\n\r\n",
+			wantResponse:     string(response.PlainText(400, "Bad Request", "bad request")),
 			wantClosed:       true,
-			wantWriteCalls:   0,
+			wantWriteCalls:   1,
 			wantLogSubstring: "parsing request",
+		},
+		{
+			name: "writes internal error response when rendering fails",
+			setup: func(t *testing.T) {
+				stubRenderer(t, func(msg response.Message) ([]byte, error) {
+					return nil, errors.New("render blew up")
+				})
+			},
+			request:          "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n",
+			wantResponse:     string(response.PlainText(500, "Internal Server Error", "internal server error")),
+			wantClosed:       true,
+			wantWriteCalls:   1,
+			wantLogSubstring: "building response",
 		},
 		{
 			name:             "logs write error and still closes connection",
@@ -196,16 +272,17 @@ func TestHandleConnection(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.setup != nil {
+				tt.setup(t)
+			}
+
 			conn := &stubConn{
 				readBuffer: bytes.NewBufferString(tt.request),
 				writeErr:   tt.writeErr,
 				remoteAddr: stubAddr("client:1234"),
 			}
 
-			var logs bytes.Buffer
-			previousWriter := log.Writer()
-			log.SetOutput(&logs)
-			defer log.SetOutput(previousWriter)
+			logs := captureLogs(t)
 
 			handleConnection(conn)
 
@@ -277,6 +354,100 @@ func bodyLength(responseText string) int {
 	}
 
 	return len(parts[1])
+}
+
+func startServer(t *testing.T, addr string) {
+	t.Helper()
+
+	go func() {
+		_ = Start(addr)
+	}()
+
+	waitForServer(t, addr)
+}
+
+func waitForServer(t *testing.T, addr string) {
+	t.Helper()
+
+	deadline := time.Now().Add(1 * time.Second)
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", addr, 20*time.Millisecond)
+		if err == nil {
+			_ = conn.Close()
+			return
+		}
+
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	t.Fatalf("server on %s did not start in time", addr)
+}
+
+func exchangeRequest(t *testing.T, addr string, rawRequest string) string {
+	t.Helper()
+
+	responseText, err := exchangeRequestWithError(addr, rawRequest)
+	if err != nil {
+		t.Fatalf("exchange request %q on %s: %v", rawRequest, addr, err)
+	}
+
+	return responseText
+}
+
+func exchangeRequestWithError(addr string, rawRequest string) (string, error) {
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+
+	if err := conn.SetDeadline(time.Now().Add(1 * time.Second)); err != nil {
+		return "", err
+	}
+
+	if _, err := conn.Write([]byte(rawRequest)); err != nil {
+		return "", err
+	}
+
+	body, err := io.ReadAll(conn)
+	if err != nil {
+		return "", err
+	}
+
+	return string(body), nil
+}
+
+func captureLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+
+	var logs bytes.Buffer
+	previousWriter := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() {
+		log.SetOutput(previousWriter)
+	})
+
+	return &logs
+}
+
+func stubAssetLoader(t *testing.T, loader func(string, string) (*static.Asset, error)) {
+	t.Helper()
+
+	previous := loadAsset
+	loadAsset = loader
+	t.Cleanup(func() {
+		loadAsset = previous
+	})
+}
+
+func stubRenderer(t *testing.T, renderer func(response.Message) ([]byte, error)) {
+	t.Helper()
+
+	previous := renderMessage
+	renderMessage = renderer
+	t.Cleanup(func() {
+		renderMessage = previous
+	})
 }
 
 type stubConn struct {
