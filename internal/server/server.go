@@ -20,6 +20,7 @@ var loadAsset = static.Load
 var renderMessage = func(msg response.Message) ([]byte, error) {
 	return response.Build(msg), nil
 }
+var handleAcceptedConnection = handleConnection
 
 func Start(addr string) error {
 	ln, err := net.Listen("tcp", addr)
@@ -28,14 +29,22 @@ func Start(addr string) error {
 	}
 	defer ln.Close()
 
+	return serve(ln)
+}
+
+func serve(ln net.Listener) error {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return nil
+			}
+
 			log.Printf("accept error: %v", err)
 			continue
 		}
 
-		go handleConnection(conn)
+		go handleAcceptedConnection(conn)
 	}
 }
 

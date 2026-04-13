@@ -114,6 +114,41 @@ func TestStartPortInUse(t *testing.T) {
 	}
 }
 
+func TestServeContinuesAfterAcceptError(t *testing.T) {
+	conn := &stubConn{readBuffer: bytes.NewBuffer(nil), remoteAddr: stubAddr("client:55")}
+	listener := &scriptedListener{
+		steps: []acceptStep{
+			{err: errors.New("temporary accept boom")},
+			{conn: conn},
+			{err: net.ErrClosed},
+		},
+	}
+
+	handled := make(chan net.Conn, 1)
+	stubConnectionHandler(t, func(conn net.Conn) {
+		handled <- conn
+	})
+
+	logs := captureLogs(t)
+
+	if err := serve(listener); err != nil {
+		t.Fatalf("serve() error = %v, want nil", err)
+	}
+
+	select {
+	case got := <-handled:
+		if got != conn {
+			t.Fatalf("handled conn = %v, want scripted conn %v", got, conn)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("expected connection handler to run after accept error")
+	}
+
+	if !strings.Contains(logs.String(), "accept error: temporary accept boom") {
+		t.Fatalf("logs = %q, want accept error entry", logs.String())
+	}
+}
+
 func TestStartReturnsInternalServerError(t *testing.T) {
 	stubAssetLoader(t, func(root string, target string) (*static.Asset, error) {
 		if target == "/boom" {
@@ -448,6 +483,51 @@ func stubRenderer(t *testing.T, renderer func(response.Message) ([]byte, error))
 	t.Cleanup(func() {
 		renderMessage = previous
 	})
+}
+
+func stubConnectionHandler(t *testing.T, handler func(net.Conn)) {
+	t.Helper()
+
+	previous := handleAcceptedConnection
+	handleAcceptedConnection = handler
+	t.Cleanup(func() {
+		handleAcceptedConnection = previous
+	})
+}
+
+type acceptStep struct {
+	conn net.Conn
+	err  error
+}
+
+type scriptedListener struct {
+	steps []acceptStep
+	index int
+	mu    sync.Mutex
+}
+
+func (l *scriptedListener) Accept() (net.Conn, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.index >= len(l.steps) {
+		return nil, net.ErrClosed
+	}
+
+	step := l.steps[l.index]
+	l.index++
+	return step.conn, step.err
+}
+
+func (l *scriptedListener) Close() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.index = len(l.steps)
+	return nil
+}
+
+func (l *scriptedListener) Addr() net.Addr {
+	return stubAddr("listener:8080")
 }
 
 type stubConn struct {
