@@ -6,6 +6,8 @@ import (
 	"strconv"
 )
 
+const plainTextContentType = "text/plain; charset=utf-8"
+
 type Message struct {
 	StatusCode int
 	Reason     string
@@ -34,6 +36,20 @@ func Build(msg Message) []byte {
 	buffer.Write(msg.Body)
 
 	return buffer.Bytes()
+}
+
+func PlainText(statusCode int, reason string, body string) []byte {
+	bodyBytes := []byte(body)
+
+	return Build(Message{
+		StatusCode: statusCode,
+		Reason:     reason,
+		Headers: map[string]string{
+			"Content-Length": strconv.Itoa(len(bodyBytes)),
+			"Content-Type":   plainTextContentType,
+		},
+		Body: bodyBytes,
+	})
 }
 
 func sortedHeaderKeys(headers map[string]string) []string {
